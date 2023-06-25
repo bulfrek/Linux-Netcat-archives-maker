@@ -1,0 +1,478 @@
+#! /bin/bash
+
+# Ce script implémente un serveur.  
+# Le script doit être invoqué avec l'argument :                                                              
+# PORT   le port sur lequel le serveur attend ses clients  
+
+if [ $# -ne 1 ]; then
+    echo "usage: $(basename $0) PORT"
+    exit -1
+fi
+
+PORT="$1"
+
+# Déclaration du tube
+
+FIFO="/tmp/$USER-fifo-$$"
+
+# Il faut détruire le tube quand le serveur termine pour éviter de
+# polluer /tmp.  On utilise pour cela une instruction trap pour être sur de
+# nettoyer même si le serveur est interrompu par un signal.
+
+function nettoyage() { rm -f "$FIFO"; }
+trap nettoyage EXIT
+
+# on crée le tube nommé
+
+[ -e "FIFO" ] || mkfifo "$FIFO"
+
+
+function accept-loop() {
+    while true; do
+        interaction < "$FIFO" | netcat -l -p "$PORT" > "$FIFO"
+    done
+}
+
+# La fonction interaction lit les commandes du client sur entrée standard 
+# et envoie les réponses sur sa sortie standard. 
+#
+#       CMD arg1 arg2 ... argn                   
+#                     
+# alors elle invoque la fonction :
+#                                                                            
+#         commande-CMD arg1 arg2 ... argn                                      
+#                                                                              
+# si elle existe; sinon elle envoie une réponse d'erreur.                     
+
+function interaction() {
+    local cmd args
+    while true; do
+        read cmd args || exit -1
+        fun="commande-$cmd"
+        if [ "$(type -t $fun)" = "function" ]; then
+            $fun $args
+        else
+            commande-non-comprise $fun $args
+        fi
+    done
+}
+ 
+# Les fonctions implémentant les différentes commandes du serveur
+
+
+function commande-non-comprise () {
+echo "Le serveur ne peut pas interpréter cette commande"
+}
+function commande-cat () {
+cat $1
+#sert uniquement de test
+}
+function commande-list () {
+echo "$(ls -p | grep -v /)"
+}
+function commande-extract () {
+cat $1
+}
+function commande-create () { 
+archive=$1
+
+if [ -f $archive ]; then
+
+        echo "vsh: Le fichier '$archive' existe déjà sur le serveur"
+else
+
+        ligne="${*:2}"
+
+        touch $archive
+
+        echo -e "$(echo "$ligne" | sed 's/\%%/\\n/g')" | sed 's/££/\\/g'> $archive
+
+        fichlong=$(wc -l $archive | cut -d' ' -f1)
+        for ((i=1 ; i <= $fichlong ; i++)); do
+                sed -i "${i}s/^ //g" $archive
+        done
+
+
+fi
+
+pkill -x nc > /dev/null 2>&1
+}
+function commande-browse () {
+    #pour chaque mode du browse, le client envoie un browse avec en argument la commande saisie et le nom de l'archive
+#!/bin/bash
+
+
+if [ ! -r $1 ]; then
+        echo "Le fichier '$1' n'est pas lisible"
+else
+
+nomf=$1 #fichier d'archive dans lequel on travaille
+racine="$(sed -n 3p $1 | cut -d' ' -f2 | sed 's/.$//g')" #racine de l'archive dont on va remplacer le dernier char '\'
+racinecmd=$(echo -E "$racine" | sed 's/\\/:/g')
+#sudo sed -i '3s/\\$//g' $nomf #!!!!!!!!!!!!!!!!!MODIFIE LARCHIVE ATTENTION!!!!!!!!!!!!!!!!!!!!(voir fonction exit)
+repa="$racine"
+if [ "$2" == "pwd" ]; then #commande pwd
+        echo -E "$repa"
+elif [ "$2" == "touch" ]; then 
+i=1
+trouve=0
+
+headf=$( head -1 $nomf | cut -d':' -f2) #fin du header
+
+
+
+while [ $i -lt $headf ] #Tant que la ligne est inferieure à la ligne de fin du header
+do
+
+        ligne=$(sed -n "$i"p $nomf) #ligne prend la valeur du contenu de la ligne i
+        #echo "ligne vaut $ligne"
+        #echo "directory $repa"
+
+        if [[ "$(echo $ligne| sed 's/\\$//g')" == "directory $repa" ]]; then #si la ligne évaluée correspond au repertoire repa
+        fichstart=$i #on enregistre la ligne de debut du repertoire dans le header
+#       echo "fichstart vaut $fichstart"
+        fi
+        i=$((i+1))
+
+done                                                    #permet de trouver la ligne de commencement du repertoire actuel dans le header pour pouvoir ensuite verifier si le fichier quon veut cat est bien dans le repertoire actuel (si ce n'est pas le chemin absolu ?"
+
+j=$((fichstart+1)) # on enregistre dans j la ligne du premier reprtoire ou fichier correpondant au repertoire repa
+
+echo " " >> $nomf
+
+        while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ]  #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+        do
+
+        j=$((j+1))
+
+        done
+
+ finrep=$j
+
+ for (( i=$(wc -l $nomf | cut -d' ' -f1); i>=$finrep; i-- )); 
+ do
+  #sed -n "$i"p $nomf
+  lignedessous=$(sed -n "$(($i-1))"p $nomf | sed 's/\\/\\\\/g')
+ # echo "on remplace la ligne $i contenant $(sed -n "$i"p $nomf) par la ligne $((i-1)) contenant  $(sed -n "$((i-1))"p $nomf)" 
+  #e#cho " "
+  sed -i "${i}s/^.*$/$lignedessous/" $nomf
+ done
+
+
+debfich=0 
+
+for ((n=$(($finrep-1)); n>=4 ; n--)); 
+ do
+  if [ $(sed -n "$n"p $nomf | wc -w | cut -d' ' -f1) -eq 5 ]; then
+
+  fichav=$n
+               debfichav=$(sed -n "$n"p $nomf | cut -d' ' -f4) #ligne de debut du fichier
+               longfichav=$(sed -n "$n"p $nomf | cut -d' ' -f5) #longueur du début de fichier
+        debfich=$(($debfichav+$longfichav))
+        break
+
+  fi
+ done
+
+sed -i "${finrep}s/^.*$/$3 -rw-r--r-- 0 $debfich 0/g" $nomf
+sed -i "1s/^3:.$/3:$(($headf+1))/g" $nomf
+
+elif  [ "$2" == "cd" ]; then
+#commande cd
+#le repertoire tape côté client sera envoyé en 3eme agument
+i=1
+trouve=0
+headf=$( head -1 $nomf | cut -d':' -f2) #fin du header
+
+
+while [ $i -lt $headf ] #Tant que la ligne est inferieure à la ligne de fin du header
+do
+
+        ligne=$(sed -n "$i"p $nomf) #ligne prend la valeur du contenu de la ligne i
+       # echo "ligne vaut $ligne"
+       # echo "directory $repa"
+
+
+
+       if [[ "$(echo $ligne | sed 's/\\$//g')" == "directory $repa" ]]; then #si la ligne évaluée correspond au repertoire repa
+                 fichstart=$i #on enregistre la ligne de debut du repertoire dans le header
+                 #echo "fichstart vaut $fichstart"
+       
+                fi
+
+
+
+        i=$((i+1))
+
+done                                                    #permet de trouver la ligne de commencement du repertoire actuel dans le header pour pouvoir ensuite verifier si le fichier quon veut cat est bien dans le repertoire actuel (si ce n'est pas le chemin absolu ?"
+
+
+
+
+
+
+j=$((fichstart+1)) # on enregistre dans j la ligne du premier reprtoire ou fichier correpondant au repertoire repa
+
+while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ] #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+do
+
+        if [ "$(sed -n "$j"p $nomf | cut -d' ' -f1)" == "$3" ] && [ $(sed -n "$j"p $nomf | wc -w) -eq 3 ]; then #Si le repertoire recherché correspond à la ligne évaluée, et que son nombre d'arguments est egal à 3
+
+                ldossiercd=$j #enregistrement de la ligne du fichier recherché dans le header
+                trouve=1 #indique que le fichier a été trouvé
+        fi
+
+j=$((j+1))
+
+done
+
+if [ $trouve -eq 1 ]; then #Si le fichier a été trouvé dans le repertoire actuel
+
+
+        repa=$(echo "$repa/$3" | sed 's/\//\\/g')
+        echo $repa
+
+elif [ "$3" == ".." ]; then
+
+if [ "$repa" != "$racine" ]; then
+
+        cutnum=$(grep -o '\\' <<< "$repa" | grep -c '\\')
+        repa=$(echo $repa | cut --complement -d'\' -f$(($cutnum+1)))
+echo $repa
+fi
+
+#elif [ $3 = \ ]; then (!!!!!!!!!!!!!A FAIRE!!!!!!!!!!!!!)
+
+else
+        echo "Le sous-répertoire '$3' n'existe pas dans le répertoire $(echo -E "$repa" | sed 's/\\/:/g' | sed "s/$racinecmd/\\\/g" | sed 's/:/\\/g' | sed 's/\\\\/\\/g')"
+
+fi
+trouve=0
+
+
+
+
+elif [ "$2" == "ls" ]; then #commande ls 
+#la aussi pour le -l par exemple, l'argument sera en 3eme
+
+i=1
+trouve=0
+
+headf=$( head -1 $nomf | cut -d':' -f2) #fin du header
+
+
+
+while [ $i -lt $headf ] #Tant que la ligne est inferieure à la ligne de fin du header
+do
+
+        ligne=$(sed -n "$i"p $nomf) #ligne prend la valeur du contenu de la ligne i
+        #echo "ligne vaut $ligne"
+       # echo "directory $repa"
+
+        if [[ "$(echo $ligne | sed 's/\\$//g')" == "directory $repa" ]]; then #si la ligne évaluée correspond au repertoire repa
+        fichstart=$i #on enregistre la ligne de debut du repertoire dans le header
+       #echo "fichstart vaut $fichstart"
+        fi
+        i=$((i+1))
+
+done                                                    #permet de trouver la ligne de commencement du repertoire actuel dans le header pour pouvoir ensuite verifier si le fichier quon veut cat est bien dans le repertoire actuel (si ce n'est pas le chemin absolu ?"
+
+j=$((fichstart+1)) # on enregistre dans j la ligne du premier reprtoire ou fichier correpondant au repertoire repa
+
+if [ "$3" == "-l" ]; then #mode -l
+
+        while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ] #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+        do
+        if [[ "$(sed -n "$j"p $nomf)" =~ ^[^.] ]]; then #si le fichier ou dossier est lisible 
+
+                        echo "$(sed -n "$j"p $nomf | cut -d' ' -f1,2,3 | awk '{print $2, $3, $1}')"
+
+                fi
+                        j=$((j+1))
+
+        done
+
+
+
+else
+
+        while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ] #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+        do
+
+                if [ $(sed -n "$j"p $nomf | wc -w) -eq 5 ] && [ $(sed -n "$j"p $nomf | grep -c ".exe") -eq 1 ] && [[ "$(sed -n "$j"p $nomf)" =~ ^[^.] ]]; then
+
+                        arg="$arg $(sed -n "$j"p $nomf | cut -d' ' -f1)*"
+
+                elif [ $(sed -n "$j"p $nomf | wc -w) -eq 3 ]; then 
+
+                        arg="$arg $(sed -n "$j"p $nomf | cut -d' ' -f1)\\ "
+
+                elif [ $(sed -n "$j"p $nomf | wc -w) -eq 5 ] && [[ "$(sed -n "$j"p $nomf)" =~ ^[^.] ]]; then
+
+                        arg="$arg $(sed -n "$j"p $nomf | cut -d' ' -f1)"
+                fi
+
+                        j=$((j+1))
+
+                done 
+
+                echo $arg
+                arg=""
+
+fi
+
+
+
+elif [ "$2" == "cat" ]; then
+#fichier a ouvrir dans 3eme argment 
+
+i=1
+trouve=0
+
+headf=$( head -1 $nomf | cut -d':' -f2) #fin du header
+
+
+
+while [ $i -lt $headf ] #Tant que la ligne est inferieure à la ligne de fin du header
+do
+
+        ligne=$(sed -n "$i"p $nomf) #ligne prend la valeur du contenu de la ligne i
+        #echo "ligne vaut $ligne"
+        #echo "directory $repa"
+
+        if [[ "$(echo $ligne| sed 's/\\$//g')" == "directory $repa" ]]; then #si la ligne évaluée correspond au repertoire repa
+        fichstart=$i #on enregistre la ligne de debut du repertoire dans le header
+#       echo "fichstart vaut $fichstart"
+        fi
+        i=$((i+1))
+
+done                                                    #permet de trouver la ligne de commencement du repertoire actuel dans le header pour pouvoir ensuite verifier si le fichier quon veut cat est bien dans le repertoire actuel (si ce n'est pas le chemin absolu ?"
+
+j=$((fichstart+1)) # on enregistre dans j la ligne du premier reprtoire ou fichier correpondant au repertoire repa
+
+if [ $# -eq 3 ]; then # si il n'y  aqu'un seul fichier à ouvrir (arg à changer)
+
+        while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ] #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+        do
+
+                if [ "$(sed -n "$j"p $nomf | cut -d' ' -f1)" == "$3" ] && [ $(sed -n "$j"p $nomf | wc -w) -eq 5 ]; then #Si le fichier recherché correspond à la ligne évaluée, et que son nombre d'arguments est egal à 5
+
+                lfichiercat=$j #enregistrement de la ligne du fichier recherché dans le header
+                trouve=1 #indique que le fichier a été trouvé
+                fi
+
+        j=$((j+1))
+
+        done
+
+        if [ $trouve -eq 1 ]; then #Si le fichier a été trouvé dans le repertoire actuel
+
+               # echo "La ligne $lfichiercat contient le fichier recherché $3 dans $repa"
+
+                debfich=$(($(sed -n "$lfichiercat"p $nomf | cut -d' ' -f4) + $headf)) #ligne de debut du fichier
+                longfich=$(sed -n "$lfichiercat"p $nomf | cut -d' ' -f5) #longueur du début de fichier
+
+                tail +$(($debfich - 1)) $nomf | head -$longfich
+
+               # echo "Le fichier commence à la ligne $debfich et prend $longfich lignes"
+
+
+        else
+                echo "Le fichier '$3' n'existe pas dans le répertoire $(echo -E "$repa" | sed 's/\\/:/g' | sed "s/$racinecmd/\\\/g" | sed 's/:/\\/g' | sed 's/\\\\/\\/g')"
+        fi
+fi 
+
+elif [ "$2" == "rm" ]; then #mode rm
+#fichier a supprimer dans 3eme argument
+
+i=1
+trouve=0
+trouved=0
+
+headf=$( head -1 $nomf | cut -d':' -f2) #fin du header
+
+
+
+while [ $i -lt $headf ] #Tant que la ligne est inferieure à la ligne de fin du header
+do
+
+        ligne=$(sed -n "$i"p $nomf) #ligne prend la valeur du contenu de la ligne i
+        #echo "ligne vaut $ligne"
+        #echo "directory $repa"
+
+        if [[ "$(echo $ligne | sed 's/\\$//g')" == "directory $repa" ]]; then #si la ligne évaluée correspond au repertoire repa
+        fichstart=$i #on enregistre la ligne de debut du repertoire dans le header
+#       echo "fichstart vaut $fichstart"
+        fi
+        i=$((i+1))
+
+done                                                    #permet de trouver la ligne de commencement du repertoire actuel dans le header pour pouvoir ensuite verifier si le fichier quon veut cat est bien dans le repertoire actuel (si ce n'est pas le chemin absolu ?"
+
+j=$((fichstart+1)) # on enregistre dans j la ligne du premier reprtoire ou fichier correpondant au repertoire repa
+
+
+while [ "$(echo $(sed -n "$j"p $nomf))" != "@" ] #tant que la ligne n'est pas égale à la fin du repertoire @, on évalue chaque ligne
+        do
+
+                if [ "$(sed -n "$j"p $nomf | cut -d' ' -f1)" == "$3" ] && [ $(sed -n "$j"p $nomf | wc -w) -eq 5 ]; then #Si le fichier recherché correspond à la ligne évaluée, et que son nombre d'arguments est egal à 5
+
+                lfichiercat=$j #enregistrement de la ligne du fichier recherché dans le header
+                trouve=1 #indique que le fichier a été trouvé
+
+                elif [ "$(sed -n "$j"p $nomf | cut -d' ' -f1)" == "$3" ] && [ $(sed -n "$j"p $nomf | wc -w) -eq 3 ]; then #SI le dossier recherché correspond à la ligne évaluée
+
+                ldossier=$j
+                trouved=1
+
+                fi
+
+        j=$((j+1))
+
+        done
+
+        if [ $trouve -eq 1 ]; then #Si le fichier a été trouvé dans le repertoire actuel
+
+                #echo "La ligne $lfichiercat contient le fichier recherché $3 dans $repa"
+
+                debfich=$(($(sed -n "$lfichiercat"p $nomf | cut -d' ' -f4) + $(($headf-1)))) #ligne de debut du fichier
+                longfich=$(sed -n "$lfichiercat"p $nomf | cut -d' ' -f5) #longueur du début de fichier
+
+                if [ $longfich -ne 0 ]; then #si le fichier ne comporte pas 0 lignes
+
+                sudo sed -i "$debfich,$(($(($debfich+$longfich))-1))"d $nomf #supp lignes du fichier dans body
+
+                fi 
+
+                sudo sed -i "$lfichiercat"d $nomf                            #supp ligne du fichier dans header
+                headf=$(($headf-1))                                  #actualise nbr de lignes du header
+               sudo sed -i "1s/.*/3:$headf/g" $nomf                         #remplace ligne du header
+
+
+
+                for ((k=$(($lfichiercat));k<=$(($headf-1));k++)); do #à partir du fichier suppr dans le header, decrémentente toutes les lignes de commencement des fichiers suivants par le nombre de lignes du fichier del
+
+                        if [ $(sed -n "$k"p $nomf | wc -w) -eq 5 ]; then
+
+                                nvl1=$(($(sed -n "$k"p $nomf | cut -d' ' -f4)-$longfich))
+                               sudo gawk -i inplace 'NR==nr1  {$4=nvl}1' "nr1=$k" "nvl=$nvl1" $nomf
+
+                        fi
+                done
+
+
+      #  elif [ $trouved -eq 1 ]; then MODE A FAIRE !!!!!
+
+
+
+        else
+                echo "Ce fichier ou dossier n'existe pas dans le répertoire $(echo -E "$repa" | sed 's/\\/:/g' | sed "s/$racinecmd/\\\/g" | sed 's/:/\\/g' | sed 's/\\\\/\\/g')"
+        fi
+        trouve=0
+
+
+echo " " 
+fi
+fi
+}
+
+accept-loop

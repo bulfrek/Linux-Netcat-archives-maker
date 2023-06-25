@@ -1,0 +1,153 @@
+#!/bin/bash
+set -- debut
+#On initialise $1 pour ne pas qu'il soit egal à exit
+while [ $1 != "exit" ]
+do
+        read -p "-> " action 
+        set -- $action
+        #Lit l'invite de commande, tout ce qui sera tapé sera dans la variable action, on prend ensuite les mots de action comme argument
+        adresse=$3
+        port=$4
+        archive=$5 
+        #On mémorise les variables utiles (dans le browse on aura un nouveau set qui changera les arguments)
+        #L'archive est egalement en dernier car pour le mode list, on en a pas besoin
+if [ $1 = "vsh" ]; then 
+if [ $2 = "-list" ]; then
+        if [ $# != 4 ]; then
+        #Le nombre d'argument doit etre de 4 sinon message d'erreur
+                echo "Commande incomplète"
+        else
+                echo "list" | nc -w 1 $adresse $port 
+                #On envoie la commande list au serveur qui l'interpretera 
+        fi
+fi
+
+if [ $2 = "-browse" ]; then 
+        if [ $# != 5 ]; then 
+                echo "Commande incomplète"
+        else
+                while [ $1 != "exit" ]; do
+                        read -p "vsh-browse> " action
+                        set -- $action
+                        if [ $1 = "pwd" ] || [ $1 = "ls" ] || [ $1 = "cat" ] || [ $1 = "rm" ] || [ $1 = "touch" ] || [ $1 = "mkdir" ] || [ $1 = "cd ]; then                              
+                                echo "browse $archive $1 $2 " | nc -w 1 $adresse $port
+                                #On envoie la commande browse avec les infos utiles (nom de l'archive pour naviguer, commande et argument de la commande)
+                        else 
+                               echo " commande non valide"
+                        fi
+                done
+                set -- reinitialisation
+                #sert a rester dans la boucle (on change $1 qui est egale a exit)
+        fi
+fi  
+
+if  [ $2 = "-create" ]; then 
+        if [ $# != 5 ]; then 
+                echo "Commande incomplète" 
+        else
+                touch /tmp/$archive
+                #Créer le fichier qui contiendra l'archive
+                dir=$(find . -type d)
+                #On mémorise les repertoire du repertoire racine
+
+                for i in $dir
+                do
+                        ligne=$(($(ls -al $i | tail +4 | wc -l)+2))   
+                        #Compte le nombre de lignes pour chaque répertoire
+                        headtot=$(($headtot + $ligne))
+                        On a le nombre de ligne total pour chaque sous repertoire
+                done
+
+                headtot=$(($headtot+3)) 
+                #Rajoute les lignes du début et de la fin
+
+                echo "3:$headtot">> /tmp/$archive
+                echo " ">> /tmp/$archive
+                bstart=$(($headtot+1))
+                repa=$(pwd | awk -F/ '{print $NF}') 
+                #Repertoire dans lequel l'utilisateur effectue la commande
+
+
+                for i in $dir
+                do
+                        echo "directory $i" | sed "s@\.@$PWD@g" | sed 's/\//\\/g' | sed 's/directory \\/directory /g'>> /tmp/$archive
+                        #Renvoie nom du repertoire avec structure changé (sans '\')
+
+                        if [ $(ls -al $i | tail +4 | wc -l) -gt 0 ]; then 
+                                #Verifie si ya qqch dans le ls
+
+                                for l in $(ls $i -a | tail +3) 
+                                #Itère dans chaque ligne du ls
+                                do
+                                        wc -l  $i/$l &> /dev/null
+                                        RESULT=$?                       
+                                        #Verifie si la ligne est un fichier
+                                        if [ $RESULT -eq 0 ]; then
+
+                                                longueur=$(wc -l $i/$l | cut -d' ' -f1)  
+                                                #Compte le nombre de lignes du fichier
+
+                                                echo "$(ls -ld $i/$l | sed 's/  */ /g' | cut -d' ' -f1,5,9 | awk '{print $3,$1,$2}' | sed 's/^[.\/].*\///g') $(($bstart-$headtot)) $longueur">> /tmp/$archive
+                                                #affiche le fichier (on remodifie par antislash)
+                                                bstart=$(($bstart+$longueur))
+                                        else
+
+                                                echo "$(ls -ld $i/$l | sed 's/   */ /g' | cut -d' ' -f1,5,9 | awk '{print $3,$1,$2}' | sed 's/^[.\/].*\///g')">> /tmp/$archive
+                                                #affiche le repertoire (remodifié par antislash egalement)
+                                        fi
+                                done
+
+
+                        fi
+                echo "@">> /tmp/$archive
+                #A la fin du repertoire, on affiche un @
+                done
+
+                n=1
+
+                for i in $dir       
+                        #Affiche le contenu des fichiers par repertoire et dans l'ordre 
+                do
+                        for j in $(find $i -maxdepth 1 -type f | sort)
+                        do
+                                fichlong=$(wc -l $j | cut -d' ' -f1)
+                                q=1
+                                while [ $q -le $fichlong ];
+                                do
+                                        sed -n "$q"p $j>> /tmp/$archive
+                                        q=$((q+1))
+                                done
+                        done
+
+
+                done
+
+                sudo sed -i '3s/$/\\/g' /tmp/$archive
+                sudo mv /tmp/$archive $PWD 
+
+
+                echo archive vaut $archive
+                #sert a atester que le fichier s'est bien crée
+                p=1
+                fin=$(wc -l $archive | cut -d' ' -f1)
+
+                while [ $p -le $fin ];
+                do
+                        sed -i "${p}s/$/%%/g" $archive
+                        sed -i "${p}s/\\\/££/g" $archive
+
+                        p=$((p+1))
+                done
+
+
+                echo -E create $archive $(cat $archive) | nc -w 1 $adresse $port
+                #Envoie le fichier dans une variable au serveur 
+                sudo rm $archive
+                #Efface enfin l'archive du client pour ne pas poluer 
+
+
+
+        fi
+fi
+fi
+done
