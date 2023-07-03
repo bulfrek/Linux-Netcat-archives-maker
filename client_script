@@ -29,7 +29,7 @@ if [ $2 = "-browse" ]; then
                 while [ $1 != "exit" ]; do
                         read -p "vsh-browse> " action
                         set -- $action
-                        if [ $1 = "pwd" ] || [ $1 = "ls" ] || [ $1 = "cat" ] || [ $1 = "rm" ] || [ $1 = "touch" ] || [ $1 = "mkdir" ] || [ $1 = "cd ]; then                              
+                        if [ $1 = "pwd" ] || [ $1 = "ls" ] || [ $1 = "cat" ] || [ $1 = "rm" ] || [ $1 = "touch" ] || [ $1 = "mkdir" ] || [ $1 = "cd" ]; then                              
                                 echo "browse $archive $1 $2 " | nc -w 1 $adresse $port
                                 #On envoie la commande browse avec les infos utiles (nom de l'archive pour naviguer, commande et argument de la commande)
                         else 
